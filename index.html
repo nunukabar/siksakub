@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Flipbook Embed Viewer</title>
+    <!-- Tailwind CSS for UI -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- PDF.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <!-- Page Flip Library -->
+    <script src="https://cdn.jsdelivr.net/npm/page-flip@2.0.7/dist/js/page-flip.browser.min.js"></script>
+    <style>
+        body {
+            background-color: #1a1a1a; 
+            overflow: hidden;
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+        }
+        #flipbook-container {
+            width: 100%;
+            height: calc(100vh - 120px);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            perspective: 2000px;
+        }
+        .page {
+            background-color: white;
+            box-shadow: 0 0 20px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        .loading-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+            z-index: 1000;
+            color: white;
+            text-align: center;
+        }
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            width: 40px; height: 40px;
+            border-radius: 50%;
+            border-left-color: #3b82f6;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        .zoom-wrapper {
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            transform-origin: center center;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* Responsivitas untuk mobile */
+        @media (max-width: 640px) {
+            #flipbook-container { padding: 10px; height: calc(100vh - 100px); }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Loading Overlay -->
+    <div id="loader" class="loading-overlay">
+        <div class="spinner mb-4"></div>
+        <p id="loadText" class="text-gray-300 font-medium text-lg">Menyiapkan Dokumen...</p>
+        <p id="renderProgress" class="text-gray-500 text-sm mt-2 italic"></p>
+    </div>
+
+    <!-- Toolbar Atas -->
+    <nav class="bg-black/50 backdrop-blur-md text-white border-b border-white/10 px-4 py-3 flex justify-between items-center relative z-50">
+        <div class="flex items-center space-x-4">
+            <h1 id="docTitle" class="font-bold text-sm sm:text-lg truncate max-w-[150px] sm:max-w-md">Flipbook Viewer</h1>
+            <label class="hidden sm:flex bg-white/10 hover:bg-white/20 text-xs px-3 py-1.5 rounded cursor-pointer items-center transition">
+                <i data-lucide="refresh-cw" class="w-3 h-3 mr-2"></i> Ganti PDF
+                <input type="file" id="pdfInput" accept="application/pdf" class="hidden">
+            </label>
+        </div>
+
+        <div class="flex items-center space-x-1 sm:space-x-3">
+            <button onclick="zoomOut()" title="Zoom Out" class="p-2 hover:bg-white/10 rounded-full transition">
+                <i data-lucide="zoom-out" class="w-5 h-5"></i>
+            </button>
+            <span id="zoomLevel" class="text-xs font-mono w-10 text-center">100%</span>
+            <button onclick="zoomIn()" title="Zoom In" class="p-2 hover:bg-white/10 rounded-full transition">
+                <i data-lucide="zoom-in" class="w-5 h-5"></i>
+            </button>
+            <div class="w-px h-6 bg-white/20 mx-1"></div>
+            <button onclick="toggleFullscreen()" title="Layar Penuh" class="p-2 hover:bg-white/10 rounded-full transition">
+                <i data-lucide="maximize" id="fullIcon" class="w-5 h-5"></i>
+            </button>
+            <button onclick="shareLink()" title="Bagikan" class="p-2 hover:bg-white/10 rounded-full transition">
+                <i data-lucide="share-2" class="w-5 h-5"></i>
+            </button>
+        </div>
+    </nav>
+
+    <!-- Area Flipbook -->
+    <div id="flipbook-container">
+        <div id="zoomWrapper" class="zoom-wrapper">
+            <div id="flipbook" class="stPageFlip">
+                <!-- Halaman akan dibuat di sini -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Toolbar Bawah -->
+    <footer id="navToolbar" class="fixed bottom-0 left-0 w-full bg-black/60 backdrop-blur-lg border-t border-white/10 p-4 flex justify-center items-center space-x-4 sm:space-x-8 text-white">
+        <button onclick="prevPage()" class="p-2 hover:bg-white/10 rounded-full transition" id="btnPrev">
+            <i data-lucide="arrow-left" class="w-6 h-6"></i>
+        </button>
+        
+        <div class="flex items-center space-x-3 bg-white/5 px-4 py-2 rounded-full border border-white/10">
+            <input type="number" id="jumpPage" min="1" value="1" class="w-12 bg-transparent text-center border-b border-blue-500 outline-none focus:border-white transition">
+            <span class="text-gray-400 text-sm">/ <span id="totalPages">0</span></span>
+            <button onclick="jumpToPage()" class="text-xs bg-blue-600 px-3 py-1 rounded-full hover:bg-blue-500 transition">Go</button>
+        </div>
+
+        <button onclick="nextPage()" class="p-2 hover:bg-white/10 rounded-full transition" id="btnNext">
+            <i data-lucide="arrow-right" class="w-6 h-6"></i>
+        </button>
+    </footer>
+
+    <script>
+        /** * KONFIGURASI LINK PDF ANDA */
+        const DEFAULT_PDF_URL = 'https://raw.githubusercontent.com/nunukabar/ZbookTES/main/ebook/Amalan%20Ringan%20Berpahala%20Besar.pdf';
+
+        // Inisialisasi PDF.js Worker
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        let pageFlip = null;
+        let pdfDoc = null;
+        let currentZoom = 1;
+        const zoomStep = 0.25;
+        const maxZoom = 2.5;
+        const minZoom = 0.5;
+
+        lucide.createIcons();
+
+        const loader = document.getElementById('loader');
+        const loadText = document.getElementById('loadText');
+        const renderProgress = document.getElementById('renderProgress');
+        const flipbookEl = document.getElementById('flipbook');
+        const zoomWrapper = document.getElementById('zoomWrapper');
+
+        window.onload = function() {
+            fetchAndLoadPdf(DEFAULT_PDF_URL);
+        };
+
+        async function fetchAndLoadPdf(url) {
+            loader.classList.remove('hidden');
+            loadText.innerText = "Mengunduh file PDF...";
+            
+            try {
+                const loadingTask = pdfjsLib.getDocument(url);
+                
+                loadingTask.onProgress = function(progress) {
+                    const percent = (progress.loaded / progress.total * 100).toFixed(0);
+                    if (!isNaN(percent)) loadText.innerText = `Mengunduh: ${percent}%`;
+                };
+
+                pdfDoc = await loadingTask.promise;
+                document.getElementById('docTitle').innerText = "Dokumen Terkoneksi";
+                await renderAllPages();
+            } catch (error) {
+                console.error(error);
+                loadText.innerText = "Error: Pastikan Link PDF benar & mendukung CORS.";
+                setTimeout(() => loader.classList.add('hidden'), 3000);
+            }
+        }
+
+        async function renderAllPages() {
+            loadText.innerText = "Mempersiapkan halaman...";
+            flipbookEl.innerHTML = ''; 
+            
+            const totalPages = pdfDoc.numPages;
+            document.getElementById('totalPages').innerText = totalPages;
+            document.getElementById('jumpPage').max = totalPages;
+
+            // Optimasi: Gunakan skala 1.2 untuk render awal agar lebih cepat (tetap tajam)
+            const renderScale = 1.2;
+
+            for (let i = 1; i <= totalPages; i++) {
+                renderProgress.innerText = `Memproses halaman ${i} dari ${totalPages}...`;
+                
+                const page = await pdfDoc.getPage(i);
+                const viewport = page.getViewport({ scale: renderScale }); 
+                
+                const canvas = document.createElement('canvas');
+                const context = canvas.getContext('2d');
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+
+                await page.render({ canvasContext: context, viewport: viewport }).promise;
+
+                const pageDiv = document.createElement('div');
+                pageDiv.className = 'page';
+                pageDiv.appendChild(canvas);
+                flipbookEl.appendChild(pageDiv);
+
+                // Optimasi: Berikan sedikit napas pada CPU setiap halaman
+                await new Promise(resolve => setTimeout(resolve, 10));
+            }
+
+            initFlipBook();
+        }
+
+        function initFlipBook() {
+            if (pageFlip) pageFlip.destroy();
+
+            const canvases = flipbookEl.querySelectorAll('canvas');
+            if (canvases.length === 0) return;
+
+            const firstPage = canvases[0];
+            const ratio = firstPage.height / firstPage.width;
+            
+            const screenW = window.innerWidth;
+            const targetW = screenW > 768 ? 500 : screenW * 0.85;
+            const targetH = targetW * ratio;
+
+            pageFlip = new St.PageFlip(flipbookEl, {
+                width: targetW,
+                height: targetH,
+                size: "stretch",
+                minWidth: 300,
+                maxWidth: 1000,
+                minHeight: 400,
+                maxHeight: 1400,
+                showCover: true,
+                usePortrait: screenW < 768,
+                mobileScrollSupport: false,
+                drawShadow: true,
+                flippingTime: 800
+            });
+
+            pageFlip.loadFromHTML(document.querySelectorAll(".page"));
+
+            pageFlip.on('flip', (e) => {
+                document.getElementById('jumpPage').value = e.data + 1;
+                updateNavButtons(e.data, pdfDoc.numPages);
+            });
+
+            loader.classList.add('hidden');
+            updateNavButtons(0, pdfDoc.numPages);
+        }
+
+        document.getElementById('pdfInput').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            loader.classList.remove('hidden');
+            const reader = new FileReader();
+            reader.onload = async function() {
+                const typedarray = new Uint8Array(this.result);
+                document.getElementById('docTitle').innerText = file.name;
+                pdfDoc = await pdfjsLib.getDocument(typedarray).promise;
+                await renderAllPages();
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        function updateNavButtons(current, total) {
+            document.getElementById('btnPrev').style.opacity = (current === 0) ? '0.3' : '1';
+            document.getElementById('btnNext').style.opacity = (current >= total - 1) ? '0.3' : '1';
+        }
+
+        function prevPage() { if (pageFlip) pageFlip.flipPrev(); }
+        function nextPage() { if (pageFlip) pageFlip.flipNext(); }
+
+        function jumpToPage() {
+            const pageNum = parseInt(document.getElementById('jumpPage').value);
+            if (pageFlip && pageNum > 0 && pageNum <= pdfDoc.numPages) {
+                pageFlip.flip(pageNum - 1);
+            }
+        }
+
+        function zoomIn() {
+            if (currentZoom < maxZoom) {
+                currentZoom += zoomStep;
+                applyZoom();
+            }
+        }
+
+        function zoomOut() {
+            if (currentZoom > minZoom) {
+                currentZoom -= zoomStep;
+                applyZoom();
+            }
+        }
+
+        function applyZoom() {
+            zoomWrapper.style.transform = `scale(${currentZoom})`;
+            document.getElementById('zoomLevel').innerText = Math.round(currentZoom * 100) + '%';
+        }
+
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+                document.getElementById('fullIcon').setAttribute('data-lucide', 'minimize');
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                    document.getElementById('fullIcon').setAttribute('data-lucide', 'maximize');
+                }
+            }
+            lucide.createIcons();
+        }
+
+        function shareLink() {
+            const url = window.location.href;
+            if (navigator.share) {
+                navigator.share({ title: 'Flipbook PDF', url: url });
+            } else {
+                const dummy = document.createElement('input');
+                document.body.appendChild(dummy);
+                dummy.value = url;
+                dummy.select();
+                document.execCommand('copy');
+                document.body.removeChild(dummy);
+                showToast("Link disalin!");
+            }
+        }
+
+        function showToast(msg) {
+            const toast = document.createElement('div');
+            toast.className = "fixed bottom-24 left-1/2 -translate-x-1/2 bg-blue-600 text-white px-6 py-2 rounded-full shadow-xl z-[1001] text-sm";
+            toast.innerText = msg;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 2000);
+        }
+
+        let resizeTimer;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(() => {
+                if (pageFlip && pdfDoc) initFlipBook();
+            }, 500);
+        });
+    </script>
+</body>
+</html>
